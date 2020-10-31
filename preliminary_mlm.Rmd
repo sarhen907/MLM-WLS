@@ -1,0 +1,214 @@
+---
+title: "Prelminary MLM Project"
+subtitle: "Effects of Education and Income on Cognitive Decline: A Multilevel Longitudinal Analysis"
+author: "Sarah Hennessy and Amabel Jeon"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_depth: 4
+    toc_float: true
+---
+
+The data analytic scripts and supplemental materials for this project will be available at https://github.com/sarhen907/MLM-WLS.
+
+```{r echo = FALSE}
+# Suppress R Code in Output
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+options(width = 100)
+# Easier formatting of coefficients
+comma <- function(x, digits = 2L) format(x, digits = digits, big.mark = ",")
+# For removing leading zero
+rmlead0 <- function(x, digits = 2L) {
+  x[] <- gsub("0\\.", "\\.", comma(x, digits))
+  x
+}
+```
+
+```{r}
+library(tidyverse) 
+library(haven) 
+library(dplyr)
+library(plyr)
+library(lme4) 
+library(lattice) 
+library(sjPlot) 
+library(MuMIn)  
+library(broom.mixed)  
+library(modelsummary) 
+library(dplyr)
+library(psych)
+library(lme4)
+library(broom)
+library(brms)
+library(rstan)
+library(glmmTMB)
+library(jtools)
+
+```
+
+```{r import}
+mywisc = read.csv("mywisc.csv")
+mywisc = mywisc[,-c(1,18:26)]
+```
+
+
+```{r clean}
+mywisc= mywisc[which(mywisc$edu != -3),]
+mywisc= mywisc[which(mywisc$edu != -1),]
+
+for (i in 1:length(mywisc$edu)){
+  if (mywisc$edu[i] == -2){
+    mywisc$edu[i] = 0
+  }
+}
+mywisc = mywisc[which(mywisc$adultincome!= 0),]
+mywisc = mywisc[which(mywisc$childincomecompare != -3),]
+
+wisclong <- mywisc %>%  
+  gather(key = var, value = val, -(personid:adultincome)) %>%  #gather by these, exclude columns ID through sex
+  separate(var, c("year","var")) %>% #separate by these (what your new columns will be)
+  spread(key = var, value = val) 
+
+wisclong$personid = as.factor(wisclong$personid)
+wisclong$sex =factor(wisclong$sex, levels= c("1","2"), labels = c("Male","Female"))
+wisclong$year = as.factor(wisclong$year)
+
+wisclong$personid = as.factor(wisclong$personid)
+wisclong$edu = factor(wisclong$edu, levels = c("0","1","2","3","4"), labels= c("NoHigherEd", "Associates","Bachelors","Masters","Doctorate"))
+wisclong$year = factor(wisclong$year, levels = c("y92","y04","y11"), labels = c("1992","2004","2011"))
+```
+
+# Introduction
+
+Past research consistently revealed that increased age is associated with lower levels of cognitive performance. Although gradual decline is common in later life, the rate of cognitive decline varies substantially (Schaie, 1996; Zelinski & Stewart, 1998; Alley et al., 2007). Education is an important factor in such varying rates of cognitive decline. Longitudinal studies suggested that higher educational attainment is related to higher levels of cognitive performance in late life (Albert et al., 1995; Colsher and Wallace, 1991). However, some research reports the opposite, suggesting that higher education does not protect against cognitive decline (Christensen et al., 2001; Hultsch et al., 1998). To our knowledge, whether attaining higher levels of education leads to a delay in cognitive decline for older adults remains conflicted. 
+
+For this project, we aim to address the following questions: 1. Does educational attainment protect against cognitive decline later in life? 2. Does socioeconomic status, in childhood or adulthood, or sex, interact with the relationship between education and cognitive decline?
+
+We will be using the Wisconsin Longitudinal Study (WLS) Data which is from a long-term study of a random sample of 10,317 men and women who graduated from Wisconsin high schools in 1957. The WLS collected data during 6 time points: 1957, 1964, 1975/77, 1992/94, 2003–2007, and 2010–2011. Demographically, the WLS sample consists of mainly white, non-Hispanic American men and women, and only a handful of African American, Hispanic, and Asian people.
+We will use total years of post-high-school education, socio-economic status (SES), and gender to predict cognitive abilities at two time points (2004, 2011). Cognitive abilities are assessed as performance on six tasks: Letter and Category fluency, Similarities, Digit ordering, Immediate recall, Delayed recall. Only participants who completed all time points will be included (N = 6,152). 
+
+Our multilevel design is as follows: Level 1 is time point and Level 2 is subject. Level 1 variables include measures of cognition. Level 2 variables include id,  sex (female or male), and SES (childhood and adulthood). 
+
+![](boxes.png)
+
+Three models will be fitted for each measure of cognition. Cognition at the first time point will be allowed to vary across participants as a random intercept. Models 1, 2, and 3 will assess the association between cognitive change across time and educational attainment (highest degree attained after hs), childhood SES (parents’ income comparison), or adult SES, respectively. We will also assess the interactions between these three predictors, as well as sex, on each outcome measure. 
+
+
+
+# Model Equations
+
+For this iteration of the project, we will be focusing on a single outcome variable `simscore`, which refers to the similarities section of the Welschler's Adult Intelligence Scale, a measure of verbal IQ. We will also only run a single model to assess the impact of sex and education on cognitive decline. 
+
+**Level 1 (within person):**
+
+$$\text{simscore}_{ij} = \beta_{0j} + \beta_{1j} \text{year} + e_{ij}$$
+
+**Level 2 (Between-person:)**
+$$
+  \begin{aligned}
+    \beta_{0j} & = \gamma_{00} + \gamma_{01} \text{edu}_{j} * \gamma_{02} \text{sex}_{j} + u_{0j} \\
+    \beta_{1j} & = \gamma_{10} + \gamma_{11} \text{edu}_{j} * \gamma_{02} \text{sex}_{j} + u_{0j} \\
+  \end{aligned}
+$$
+
+
+# Models
+
+```{r}
+simdata = wisclong
+simdata = simdata[which(simdata$year != 2011),]
+
+simdata = simdata[which(simdata$simscore >= 0),]
+```
+
+
+```{r}
+model2 = glmmTMB(simscore ~ sex*edu* year + (year| personid) , data = simdata, dispformula= ~0)
+#summary(model2)
+```
+
+```{r}
+coefs = as.data.frame(fixef(model2)$cond)
+coefs = coefs %>% 
+ mutate_if(is.numeric, round, digits = 3)
+```
+
+
+## Coefficient Table
+
+```{r}
+tab_model(model2, show.ci= FALSE)
+```
+
+## Plots
+
+```{r figure-1}
+ggplot(simdata, aes(year, simscore, colour = edu)) +
+  geom_jitter(shape = 16, size = 1, show.legend = TRUE,alpha = 0.6) +
+  geom_smooth(method=lm, se=FALSE, fullrange=TRUE, lwd = .7)+
+  theme_bw(base_size = 12, base_family = "Times")+
+   scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  ylab("Similarities Score (WAIS)")+
+  ggtitle("Figure 1")+
+  xlab("Year")+
+  theme(text = element_text(),
+        legend.title = element_blank(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"))
+```
+
+```{r figure-2}
+
+sum = ddply(simdata, c("sex", "edu", "year"), summarise,
+                     N = length(simscore), # calculates # of individuals per group by year
+                     mean = mean(simscore), # calculates mean for each group by year
+                     sd = sd(simscore), # calculates sd for each group by year
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=edu, group = edu)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score)") +
+  ggtitle("Figure 2")+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+
+# Summary and Interpretation
+
+The coefficient table above shows the parameter estimates of the model. The within-person coefficient of year was significant, with the coefficient estimated at `r coefs[7,1]`, indicating that participants' score on the similarities task declined from 1992 to 2004, as shown in Figure 1. The main effect of education was also significant. The coefficient for individuals with Associates degrees was `r coefs[3,1]`, for Bachelor's `r coefs[4,1]`, for Masters `r coefs [5,1]`, and for Doctorates `r coefs[6,1]`, indicating that , in general, higher educational attainment was associated with overall higher scores on the similarities task (as shown in Figure 2). The main effect of sex indicated that females overall had higher scores than males across time, with a coefficient of `r coefs[2,1]`. Next, assessed the interactions between year, sex, and education. The interaction beteen year and education at the Bachelor's level was significant, with a coefficient of `r coefs[14,1]`. This indicates that the extent to which individual's similarity scores decline overtime is moderated by attainment of education in those with Bachelor's degrees. While the remaining education levels were not significant, the slopes of cognitive decline show a trend of flattening with each higher level of education.  No other interactions were significant. Overall, this shows that education level and sex affects verbal IQ (measured by similarities score) overall, and that education may have an effect of slowing the rate of cognitive decline, regardless of sex.
+
+In future additions to this project, we plan to add predictors of childhood and adult income to further explore their combined contribution to cognitive decline. We then plan to repeat the above and expanded analysis on four additional measures of cognitive ability to examine if the effect of sex, education, and income are specific to a particular domain of cognition. 
+
+# References
+
+
+Albert, M. S., Jones, K., Savage, C. R., Berkman, L., Seeman, T., Blazer, D., & Rowe, J. W. (1995). Predictors of cognitive change in older persons: MacArthur studies of successful aging. Psychology and aging, 10(4), 578.
+
+Alley, D., Suthers, K., & Crimmins, E. (2007). Education and cognitive decline in older Americans: Results from the AHEAD sample. Research on aging, 29(1), 73-94.
+
+Christensen, H., Hofer, S. M., MacKinnon, A. J., Korten, A. E., Jorm, A. F., & Henderson, A. S. (2001). Age is no kinder to the better educated: absence of an association investigated using latent growth techniques in a community sample. Psychological medicine, 31(1), 15.
+
+Colsher, P. L., & Wallace, R. B. (1991). Longitudinal application of cognitive function measures in a defined population of community-dwelling elders. Annals of Epidemiology, 1(3), 215-230.
+
+Hultsch, D. F., Hertzog, C., Dixon, R. A., & Small, B. J. (1998). Memory change in the aged. Cambridge University Press.
+
+Schaie, K. W. (1996). Intellectual development in adulthood: The Seattle longitudinal study. Cambridge University Press.
+
+Zelinski, E. M., & Stewart, S. T. (1998). Individual differences in 16-year memory changes. Psychology and aging, 13(4), 622.
+
+Data: Wisconsin Longitudinal Study (WLS) [graduates, siblings, and spouses]: 1957-2020 Version 13.08. [machine-readable data file] / Hauser, Robert M., William H. Sewell, and Pamela Herd. [principal investigator(s)]. Madison, WI: University of Wisconsin-Madison, WLS. [distributor]; <http://www.ssc.wisc.edu/wlsresearch/documentation/>
