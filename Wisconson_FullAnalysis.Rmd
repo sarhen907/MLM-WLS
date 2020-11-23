@@ -1,0 +1,2013 @@
+---
+title: "Effects of Education and Income on Cognitive Decline: A Multilevel Longitudinal Analysis"
+author: "Sarah Hennessy and Amabel Jeon"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    theme: cosmo
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+pdf_document:
+    toc: yes
+    toc_depth: '4'
+---
+
+The data analytic scripts and supplemental materials for this project are available at https://github.com/sarhen907/MLM-WLS. This .html provides output from statistical models and graphically represents data in various plots. Individual models may be run in the .rmd, and individual steps for analysis may be navigated through the .rmd tabs. 
+
+```{r, echo = FALSE}
+# Suppress R Code in Output
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, error= TRUE)
+options(width = 100)
+```
+
+```{r}
+library(tidyverse) 
+library(haven) 
+library(lme4)  
+library(lattice) 
+library(sjPlot) 
+library(MuMIn) 
+library(broom.mixed) 
+library(modelsummary)  
+library(dplyr)
+library(stargazer)
+library(reshape)
+library(reshape2)
+library(psych)
+library(lme4)
+library(broom)
+library(brms)
+library(rstan)
+library(glmmTMB)
+library(jtools)
+library(texreg)
+library(plyr)
+library(bootmlm)
+```
+
+# Data manipulation
+```{r}
+mywisc = read.csv("mywisc.csv")
+```
+
+```{r}
+mywisc = mywisc[,-c(1,20:27)]
+```
+
+
+```{r,Edu Cleanup}
+mywisc= mywisc[which(mywisc$edu != -3),]
+mywisc= mywisc[which(mywisc$edu != -1),]
+
+for (i in 1:length(mywisc$edu)){
+  if (mywisc$edu[i] == -2){
+    mywisc$edu[i] = 0
+  }
+}
+```
+
+```{r}
+mywisc$edu2 = mywisc$edu
+for (i in 1:dim(mywisc)[1]){
+  if (mywisc$edu[i] == 0){
+    mywisc$edu2[i] = "No_HigherEd"
+  } else {
+    mywisc$edu2[i] = "HigherEd"}
+}
+```
+
+```{r, Adult income Cleanup}
+mywisc = mywisc[which(mywisc$adultincome > 9),]
+```
+
+```{r,categorize income}
+mywisc$income01 = mywisc$adultincome
+for (i in 1:dim(mywisc)[1]){
+  if (mywisc$adultincome[i] > 9 & mywisc$adultincome[i] < 32001){
+    mywisc$income01[i] = "Low_Income"
+  } else if (mywisc$adultincome[i] > 32000 & mywisc$adultincome[i] < 48501){
+    mywisc$income01[i] = "MidLow_Income"
+  }else if (mywisc$adultincome[i] > 48500 & mywisc$adultincome[i] < 65001){
+    mywisc$income01[i] = "Mid_Income"
+  }else if (mywisc$adultincome[i] > 59000){
+    mywisc$income01[i] = "High_Income"
+  }
+}
+
+```
+
+
+```{r, Childhood income cleanup}
+mywisc = mywisc[which(mywisc$childincomecompare != -3),]
+```
+
+
+
+```{r,Long form}
+wisclong <- mywisc %>%  
+  gather(key = var, value = val, -c(personid:adultincome, income01, edu2)) %>%  
+  separate(var, c("year","var")) %>% 
+  spread(key = var, value = val) 
+
+wisclong$personid = as.factor(wisclong$personid)
+wisclong$sex =factor(wisclong$sex, levels= c("1","2"), labels = c("Male","Female"))
+wisclong$year = as.factor(wisclong$year)
+wisclong$income01 = factor(wisclong$income01, levels = c("Low_Income","MidLow_Income","Mid_Income","High_Income"))
+wisclong$edu2 = factor(wisclong$edu2, levels = c("No_HigherEd","HigherEd"))
+wisclong$childincomecompare1 = wisclong$childincomecompare
+wisclong$childincomecompare1 = as.factor(wisclong$childincomecompare1)
+
+
+wisclong$adultincome = wisclong$adultincome / 10000
+```
+
+
+```{r, Long form factoring}
+wisclong$personid = as.factor(wisclong$personid)
+wisclong$edu1 = wisclong$edu
+wisclong$edu1 = factor(wisclong$edu1, levels = c("0","1","2","3","4"), labels= c("NoHigherEd", "Associates","Bachelors","Masters","Doctorate"))
+wisclong$year = factor(wisclong$year, levels = c("y92","y04","y11"), labels = c("1992","2004","2011"))
+```
+
+# Descriptive 
+
+
+## Demographics
+
+```{r}
+#taking from participants who completed categorical fluency 
+catdata = wisclong
+catdata = catdata[which(catdata$year != 1992),]
+catdata = catdata[which(catdata$catflu > 0),]
+demo = select(catdata, yob, sex,edu1,childincomecompare,adultincome)
+demo$sex = as.factor(demo$sex)
+
+demo$yob = as.factor(demo$yob)
+summary(demo)
+
+f = 1983/4249
+m = 1-f
+
+nhe = 2794/4249
+asoc = 116/4249
+bachelor = 735/4249
+master = 442/4249
+doctorate = 162/4249
+
+incomemean = mean(demo$adultincome)
+incomesd = sd(demo$adultincome)
+
+yob37 = 44/4249
+yob38 = 631/4249
+yob39 = 3342/4249
+yob40 = 232/4249
+
+```
+
+
+## Summary Tables
+
+
+```{r}
+
+simdata = wisclong
+simdata = simdata[which(simdata$year != 2011),]
+simdata = simdata[which(simdata$simscore >= 0),]
+
+
+sum = ddply(simdata, c("year"), summarise,
+                     N = length(simscore), 
+                     mean = mean(simscore), 
+                     sd = sd(simscore), 
+                     se = sd / sqrt(N))
+
+
+stargazer(sum, title = "Simlarities (WAIS)", summary = FALSE, rownames = FALSE,  type = 'html')
+```
+
+```{r}
+catdata = wisclong
+catdata = catdata[which(catdata$year != 1992),]
+catdata = catdata[which(catdata$catflu > 0),]
+
+sum = ddply(catdata, c("year"), summarise,
+                     N = length(catflu), 
+                     mean = mean(catflu), 
+                     sd = sd(catflu),  
+                     se = sd / sqrt(N))
+
+
+stargazer(sum, title = "Categorical Fluency", summary = FALSE, rownames = FALSE,  type = 'html')
+```
+
+
+```{r}
+letdata = wisclong
+letdata = letdata[which(letdata$year != 1992),]
+letdata = letdata[which(letdata$letterflu > 0),]
+
+sum = ddply(letdata, c("year"), summarise,
+                     N = length(letterflu), 
+                     mean = mean(letterflu), 
+                     sd = sd(letterflu),  
+                     se = sd / sqrt(N))
+
+stargazer(sum, title = "Letter Fluency", summary = FALSE, rownames = FALSE,  type = 'html')
+```
+
+
+```{r}
+imdata = wisclong
+im = select(imdata, imrecall, year)
+imdata = imdata[which(imdata$year != 1992),]
+imdata = imdata[which(imdata$imrecall > 0),]
+
+sum = ddply(imdata, c("year"), summarise,
+                     N = length(imrecall), 
+                     mean = mean(imrecall), 
+                     sd = sd(imrecall),  
+                     se = sd / sqrt(N))
+
+stargazer(sum, title = "Immediate Recall", summary = FALSE, rownames = FALSE,  type = 'html')
+```
+
+
+```{r}
+digitdata = wisclong
+digitdata = digitdata[which(digitdata$year != 1992),]
+digitdata = digitdata[which(digitdata$digit > 0),]
+
+sum = ddply(digitdata, c("year"), summarise,
+                     N = length(digit), 
+                     mean = mean(digit), 
+                     sd = sd(digit),  
+                     se = sd / sqrt(N))
+
+stargazer(sum, title = "Digit Ordering", summary = FALSE, rownames = FALSE,  type = 'html')
+```
+
+## Correlations between variables 
+
+predictors only
+```{r}
+wisclong$childincomecompare = as.numeric(wisclong$childincomecompare)
+forcor = select(wisclong,year,edu,childincomecompare,adultincome)
+forcor = forcor[which(forcor$year == "2004"),]
+forcor = forcor[,-1]
+
+colnames(forcor) = c("Education","Childhood Income", "Adult Income")
+
+cormat <- round(cor(forcor),2)
+
+get_lower_tri<-function(cormat){
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+  
+  upper_tri <- get_upper_tri(cormat)
+  
+  melted_cormat <- melt(upper_tri, na.rm = TRUE)
+ ggheatmap <- ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "#0991ff", high = "#f0650e", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed()
+
+ggheatmap + 
+geom_text(aes(Var2, Var1, label = value), color = "black", size = 4) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank(),
+  legend.justification = c(1, 0),
+  legend.position = c(0.6, 0.7),
+  legend.direction = "horizontal")+
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5))
+```
+
+
+Outcome variables
+
+```{r}
+forcor = select(wisclong, year, catflu, digit, letterflu,imrecall,simscore)
+forcor = forcor[which(forcor$year == "2004"),]
+forcor = forcor[,-1]
+
+colnames(forcor) = c("Categorical Fluency", "Digit Ordering", "Letter Fluency","Immediate Recall","Similarities Score")
+
+cormat <- round(cor(forcor),2)
+
+get_lower_tri<-function(cormat){
+    cormat[upper.tri(cormat)] <- NA
+    return(cormat)
+  }
+  # Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+  
+  upper_tri <- get_upper_tri(cormat)
+  
+  melted_cormat <- melt(upper_tri, na.rm = TRUE)
+ ggheatmap <- ggplot(data = melted_cormat, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "#0991ff", high = "#f0650e", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+ theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 12, hjust = 1))+
+ coord_fixed()
+ 
+
+ggheatmap + 
+geom_text(aes(Var2, Var1, label = value), color = "black", size = 4) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank(),
+  legend.justification = c(1, 0),
+  legend.position = c(0.6, 0.7),
+  legend.direction = "horizontal")+
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5))
+```
+
+
+## ICC
+
+simscore
+```{r}
+ran_int <- lmer(simscore ~ 1 + (1 | personid), data = simdata)
+#summary(ran_int)
+
+variance_components <- as.data.frame(VarCorr(ran_int))
+between_var <- variance_components$vcov[1]
+within_var <- variance_components$vcov[2]
+(icc <- between_var / (between_var + within_var))
+bootmlm:::prof_ci_icc(ran_int)		
+
+def = 1 + (2-1)*icc
+def			
+```
+
+categorical fluency
+```{r}
+ran_int <- lmer(catflu ~ 1 + (1 | personid), data = catdata)
+# Summarize results
+#summary(ran_int)
+
+variance_components <- as.data.frame(VarCorr(ran_int))
+between_var <- variance_components$vcov[1]
+within_var <- variance_components$vcov[2]
+(icc <- between_var / (between_var + within_var))
+bootmlm:::prof_ci_icc(ran_int)	
+
+def = 1 + (2-1)*icc
+def
+```
+
+
+letter fluency
+```{r}
+ran_int <- lmer(letterflu ~ 1 + (1 | personid), data = letdata)
+
+#summary(ran_int)
+
+variance_components <- as.data.frame(VarCorr(ran_int))
+between_var <- variance_components$vcov[1]
+within_var <- variance_components$vcov[2]
+(icc <- between_var / (between_var + within_var))
+bootmlm:::prof_ci_icc(ran_int)	
+
+def = 1 + (2-1)*icc
+def
+```
+
+immediate recall
+```{r}
+ran_int <- lmer(imrecall ~ 1 + (1 | personid), data = imdata)
+# Summarize results
+#summary(ran_int)
+
+variance_components <- as.data.frame(VarCorr(ran_int))
+between_var <- variance_components$vcov[1]
+within_var <- variance_components$vcov[2]
+(icc <- between_var / (between_var + within_var))
+bootmlm:::prof_ci_icc(ran_int)	
+
+def = 1 + (2-1)*icc
+def
+```
+
+digit ordering
+```{r}
+ran_int <- lmer(digit ~ 1 + (1 | personid), data = digitdata)
+# Summarize results
+#summary(ran_int)
+
+variance_components <- as.data.frame(VarCorr(ran_int))
+between_var <- variance_components$vcov[1]
+within_var <- variance_components$vcov[2]
+(icc <- between_var / (between_var + within_var))
+bootmlm:::prof_ci_icc(ran_int)	
+
+def = 1 + (2-1)*icc
+def
+```
+
+# Similarities
+
+## Models
+
+```{r, error = TRUE}
+mtime = glmmTMB(simscore ~ year + (year| personid) , data = simdata, dispformula= ~0)
+#summary(mtime)
+```
+
+### Edu only
+
+```{r}
+medu = glmmTMB(simscore ~ edu*year + (year| personid) , data = simdata, dispformula= ~0)
+#summary(medu)
+```
+
+```{r}
+medusex = glmmTMB(simscore ~ sex*edu *year + (year| personid) , data = simdata, dispformula= ~0)
+#summary(medusex)
+```
+
+###  SES only
+
+```{r}
+min = glmmTMB(simscore ~ adultincome *year + (year| personid) , data = simdata, dispformula= ~0)
+#summary(min)
+```
+
+```{r}
+minsex = glmmTMB(simscore ~ sex*adultincome *year + (year| personid) , data = simdata, dispformula= ~0)
+#summary(minsex)
+```
+
+```{r}
+mchin = glmmTMB(simscore ~ childincomecompare *year + (year| personid) , data = simdata, dispformula= ~0)
+#summary(mchin)
+```
+
+```{r}
+mchinsex = glmmTMB(simscore ~ sex*childincomecompare *year + (year| personid) , data = simdata, dispformula= ~0)
+#summary(mchinsex)
+```
+
+
+### Edu and Income
+
+
+```{r}
+minsexedu = glmmTMB(simscore ~ sex*adultincome*edu *year + (year| personid) , data = simdata, dispformula= ~0)
+#summary(minsexedu)
+```
+
+```{r}
+mchinsexedu = glmmTMB(simscore ~ sex*childincomecompare*edu *year + (year| personid) , data = simdata, dispformula= ~0)
+#summary(mchinsexedu)
+```
+
+
+### Final table
+```{r,results='asis'}
+texreg::htmlreg(list(mtime, medu, medusex, min,minsex, minsexedu,mchin, mchinsex, mchinsexedu), 
+                custom.model.names = c("by Time", "Edu * Year","Edu * Sex * Year", "Income * Year", "Income * Sex * Year",  "Income * Sex * Edu * Year", "Child Income * Year", "Child Income * Sex * Year", "Child Income * Sex * Edu * Year"), 
+                caption = "Results of Similarities Modeling", bold = TRUE)
+
+
+```
+
+*Printed Table to a word doc*
+```{r}
+# a = texreg::wordreg(list(mtime, medusex, minsex, minsexedu, mchinsex, mchinsexedu), 
+#                 custom.model.names = c("by Time" ,"Edu * Sex * Year",  "Income * Sex * Year",  "Income * Sex * Edu * Year" , "Child Income * Sex * Year", "Child Income * Sex * Edu * Year"), 
+#                 caption = "Results of Similarities Modeling", bold = TRUE, file = "similaritiestable.doc")
+```
+
+## Plots
+
+```{r}
+sum = ddply(simdata, c("year","sex"), summarise,
+                     N = length(simscore),
+                     mean = mean(simscore), 
+                     sd = sd(simscore),
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, group = sex, colour = sex)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score") +
+  theme_bw(base_size = 22, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+
+```
+
+#### Adult variables
+
+```{r}
+sum = ddply(simdata, c("edu1", "year"), summarise,
+                     N = length(simscore), 
+                     mean = mean(simscore),
+                     sd = sd(simscore), 
+                     se = sd / sqrt(N))
+colnames(sum) = c("Education", "year", "N"   ,"mean" ,"sd" ,  "se" )
+
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=Education, group = Education)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score (WAIS)") +
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+```
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+
+sum = ddply(simdata, c("sex", "edu1", "year"), summarise,
+                     N = length(simscore), 
+                     mean = mean(simscore), 
+                     sd = sd(simscore),
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=edu1, group = edu1)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score") +
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+```{r}
+sum = ddply(simdata, c("income01", "year"), summarise,
+                     N = length(simscore), 
+                     mean = mean(simscore), 
+                     sd = sd(simscore),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title = element_blank(),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+```
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center" }
+sum = ddply(simdata, c("sex", "income01", "year"), summarise,
+                     N = length(simscore), 
+                     mean = mean(simscore), 
+                     sd = sd(simscore),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+
+```{r echo = FALSE, fig.height = 12, fig.width = 12, fig.align = "center"}
+sum = ddply(simdata, c("edu2", "income01", "year", "sex"), summarise,
+                     N = length(simscore), 
+                     mean = mean(simscore), 
+                     sd = sd(simscore),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score") +
+  expand_limits(y = c(5,10))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 30, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.title = element_blank(),
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(sex ~edu2, scales = "free") 
+```
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = interaction(sex, income01), linetype = sex)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score") +
+  expand_limits(y = c(5,10))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75)) +
+     facet_grid(. ~edu2, scales = "free") 
+```
+
+#### Child Variables
+
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+sum = ddply(simdata, c("sex", "childincomecompare1", "year"), summarise,
+                     N = length(simscore), 
+                     mean = mean(simscore), 
+                     sd = sd(simscore),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = childincomecompare1)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+
+```{r echo = FALSE, fig.height = 12, fig.width = 12, fig.align = "center"}
+sum = ddply(simdata, c("edu2", "childincomecompare1", "year", "sex"), summarise,
+                     N = length(simscore), 
+                     mean = mean(simscore), 
+                     sd = sd(simscore),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = childincomecompare1)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score") +
+  expand_limits(y = c(5,10))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(sex ~edu2, scales = "free") 
+```
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = interaction(sex, childincomecompare1), linetype = sex)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score") +
+  expand_limits(y = c(5,10))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75)) +
+     facet_grid(. ~edu2, scales = "free") 
+```
+
+
+
+# Categorical Fluency
+
+
+## Models
+
+```{r}
+mtime = glmmTMB(catflu ~ year + (year| personid) , data = catdata, dispformula= ~0)
+#summary(mtime)
+```
+
+### Edu only
+
+
+```{r}
+medu = glmmTMB(catflu ~ edu*year + (year| personid) , data = catdata, dispformula= ~0)
+#summary(medu)
+```
+
+
+```{r}
+medusex = glmmTMB(catflu ~ sex*edu *year + (year| personid) , data = catdata, dispformula= ~0)
+#summary(medusex)
+```
+
+### Edu and Income
+
+
+```{r}
+minsexedu = glmmTMB(catflu ~ sex*adultincome*edu *year + (year| personid) , data = catdata, dispformula= ~0)
+#summary(minsexedu)
+```
+
+```{r}
+mchinsexedu = glmmTMB(catflu ~ sex*childincomecompare*edu *year + (year| personid) , data = catdata, dispformula= ~0)
+#summary(mchinsexedu)
+```
+
+### Final table
+
+```{r,results='asis'}
+texreg::htmlreg(list(mtime, medu, medusex, min,minsex, minsexedu,mchin, mchinsex, mchinsexedu), 
+                custom.model.names = c("by Time", "Edu * Year","Edu * Sex * Year", "Income * Year", "Income * Sex * Year",  "Income * Sex * Edu * Year", "Child Income * Year", "Child Income * Sex * Year", "Child Income * Sex * Edu * Year"), 
+                caption = "Results of Categorical Fluency Modeling", bold = TRUE)
+
+
+```
+
+*printed table for .doc*
+```{r}
+# a = texreg::wordreg(list(mtime, medusex, minsex, minsexedu, mchinsex, mchinsexedu), 
+#                 custom.model.names = c("by Time" ,"Edu * Sex * Year",  "Income * Sex * Year",  "Income * Sex * Edu * Year" , "Child Income * Sex * Year", "Child Income * Sex * Edu * Year"), 
+#                 caption = "Results of Categorical Fluency Modeling", bold = TRUE, file = "cattable.doc")
+```
+
+## Plots
+
+```{r}
+sum = ddply(catdata, c("year","sex"), summarise,
+                     N = length(catflu), 
+                     mean = mean(catflu), 
+                     sd = sd(catflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, group = sex, colour = sex)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Categorical Fluency Score") +
+  theme_bw(base_size = 22, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+#ggsave("cat_year.jpeg")  
+```
+
+#### Adult variables
+
+
+```{r}
+sum = ddply(catdata, c("edu1", "year"), summarise,
+                     N = length(catflu), 
+                     mean = mean(catflu), 
+                     sd = sd(catflu),  
+                     se = sd / sqrt(N))
+colnames(sum) = c("Education", "year", "N"   ,"mean" ,"sd" ,  "se" )
+
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=Education, group = Education)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Categorical Fluency Score") +
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+```
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+
+sum = ddply(catdata, c("sex", "edu1", "year"), summarise,
+                     N = length(catflu), 
+                     mean = mean(catflu), 
+                     sd = sd(catflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=edu1, group = edu1)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Categorical Fluency") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 29, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+```{r}
+sum = ddply(catdata, c("income01", "year"), summarise,
+                     N = length(catflu), 
+                     mean = mean(catflu), 
+                     sd = sd(catflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Categorical Fluency Score") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title = element_blank(),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+```
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10}
+sum = ddply(catdata, c("sex", "income01", "year"), summarise,
+                     N = length(catflu), 
+                     mean = mean(catflu), 
+                     sd = sd(catflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Categorical Fluency") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+no higher ed vs higher ed
+
+
+```{r echo = FALSE, fig.height = 12, fig.width = 12, fig.align = "center"}
+sum = ddply(catdata, c("edu2", "income01", "year", "sex"), summarise,
+                     N = length(catflu), 
+                     mean = mean(catflu), 
+                     sd = sd(catflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd,shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Categorical Fluency Score") +
+  expand_limits(y = c(17,26))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 30, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.title = element_blank(),
+        legend.box.background = element_rect(colour = "gray43"))+
+   facet_grid(sex ~edu2, scales = "free") 
+```
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = interaction(sex, income01), linetype = sex)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Similarities Score") +
+  expand_limits(y = c(15,30))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75)) +
+     facet_grid(. ~edu2, scales = "free") 
+```
+
+#### Child Variables
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+sum = ddply(catdata, c("sex", "childincomecompare1", "year"), summarise,
+                     N = length(catflu), 
+                     mean = mean(catflu), 
+                     sd = sd(catflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = childincomecompare1)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Categorical Fluency Score)") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+no higher ed vs higher ed
+
+```{r echo = FALSE, fig.height = 12, fig.width = 12, fig.align = "center"}
+sum = ddply(catdata, c("edu2", "childincomecompare1", "year", "sex"), summarise,
+                     N = length(catflu), 
+                     mean = mean(catflu), 
+                     sd = sd(catflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = childincomecompare1)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Categorical Fluency Score") +
+  expand_limits(y = c(5,10))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(sex ~edu2, scales = "free") 
+```
+
+
+# Letter Fluency
+
+
+## Models
+
+
+```{r}
+mtime = glmmTMB(letterflu ~ year + (year| personid) , data = letdata, dispformula= ~0)
+#summary(mtime)
+```
+
+### Edu only
+
+
+```{r}
+medu = glmmTMB(letterflu ~ edu*year + (year| personid) , data = letdata, dispformula= ~0)
+#summary(medu)
+```
+
+
+add gender
+```{r}
+medusex = glmmTMB(letterflu ~ sex*edu *year + (year| personid) , data = letdata, dispformula= ~0)
+#summary(medusex)
+```
+
+
+###  SES only
+adult income
+```{r}
+min = glmmTMB(letterflu ~ adultincome *year + (year| personid) , data = letdata, dispformula= ~0)
+#summary(min)
+```
+
+
+```{r}
+minsex = glmmTMB(letterflu ~ sex*adultincome *year + (year| personid) , data = letdata, dispformula= ~0)
+#summary(minsex)
+```
+
+
+```{r}
+mchin = glmmTMB(letterflu ~ childincomecompare *year + (year| personid) , data = letdata, dispformula= ~0)
+#summary(mchin)
+```
+
+
+```{r}
+mchinsex = glmmTMB(letterflu ~ sex*childincomecompare *year + (year| personid) , data = letdata, dispformula= ~0)
+#summary(mchinsex)
+```
+
+
+### Edu and Income
+
+```{r}
+minsexedu = glmmTMB(letterflu ~ sex*adultincome*edu *year + (year| personid) , data = letdata, dispformula= ~0)
+#summary(minsexedu)
+```
+
+```{r}
+mchinsexedu = glmmTMB(letterflu ~ sex*childincomecompare*edu *year + (year| personid) , data = letdata, dispformula= ~0)
+#summary(mchinsexedu)
+```
+
+
+### Final table
+```{r,results='asis'}
+texreg::htmlreg(list(mtime, medu, medusex, min,minsex, minsexedu,mchin, mchinsex, mchinsexedu), 
+                custom.model.names = c("by Time", "Edu * Year","Edu * Sex * Year", "Income * Year", "Income * Sex * Year",  "Income * Sex * Edu * Year", "Child Income * Year", "Child Income * Sex * Year", "Child Income * Sex * Edu * Year"), 
+                caption = "Results of Letter Fluency Modeling", bold = TRUE)
+
+
+```
+
+*printed table to word doc*
+```{r}
+# a = texreg::wordreg(list(mtime, medusex, minsex, minsexedu, mchinsex, mchinsexedu), 
+#                 custom.model.names = c("by Time" ,"Edu * Sex * Year",  "Income * Sex * Year",  "Income * Sex * Edu * Year" , "Child Income * Sex * Year", "Child Income * Sex * Edu * Year"), 
+#                 caption = "Results of Letter Fluency Modeling", bold = TRUE, file = "lettable.doc")
+```
+
+## Plots
+
+```{r}
+sum = ddply(letdata, c("year","sex"), summarise,
+                     N = length(letterflu), 
+                     mean = mean(letterflu), 
+                     sd = sd(letterflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, group = sex, colour = sex)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Letter Fluency Score") +
+  theme_bw(base_size = 22, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+
+#ggsave("let_year.jpeg")  
+  
+```
+#### Adult variables
+
+
+```{r}
+sum = ddply(letdata, c("edu1", "year"), summarise,
+                     N = length(letterflu), 
+                     mean = mean(letterflu), 
+                     sd = sd(letterflu),  
+                     se = sd / sqrt(N))
+colnames(sum) = c("Education", "year", "N"   ,"mean" ,"sd" ,  "se" )
+
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=Education, group = Education)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Letter Fluency Score") +
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+```
+
+```{r}
+sum = ddply(letdata, c("income01", "year"), summarise,
+                     N = length(letterflu), 
+                     mean = mean(letterflu), 
+                     sd = sd(letterflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Letter Fluency Score") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title = element_blank(),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+```
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+sum = ddply(letdata, c("sex", "income01", "year"), summarise,
+                     N = length(letterflu), 
+                     mean = mean(letterflu), 
+                     sd = sd(letterflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Letter Fluency Score)") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+```{r echo = FALSE, fig.height = 12, fig.width = 12, fig.align = "center"}
+sum = ddply(letdata, c("edu2", "income01", "year", "sex"), summarise,
+                     N = length(letterflu), 
+                     mean = mean(letterflu), 
+                     sd = sd(letterflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Letter Fluency Score") +
+  expand_limits(y = c(8,14))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 30, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.title = element_blank(),
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(sex ~edu2, scales = "free") 
+```
+
+```{r echo = FALSE, fig.height =6, fig.width = 10, fig.align = "center"}
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = interaction(sex, income01), linetype = sex)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Letter Fluency Score") +
+  expand_limits(y = c(8,14))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75)) +
+     facet_grid(. ~edu2, scales = "free") 
+```
+
+#### Child Variables
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+sum = ddply(letdata, c("sex", "childincomecompare1", "year"), summarise,
+                     N = length(letterflu), 
+                     mean = mean(letterflu), 
+                     sd = sd(letterflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = childincomecompare1)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Letter Fluency Score") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+```{r echo = FALSE, fig.height = 12, fig.width = 12, fig.align = "center"}
+sum = ddply(letdata, c("edu2", "childincomecompare1", "year", "sex"), summarise,
+                     N = length(letterflu), 
+                     mean = mean(letterflu), 
+                     sd = sd(letterflu),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = childincomecompare1)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Letter Fluency") +
+  expand_limits(y = c(5,10))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(sex ~edu2, scales = "free") 
+```
+
+
+
+# Immediate Recall
+
+## Models
+
+```{r}
+mtime = glmmTMB(imrecall ~ year + (year| personid) , data = imdata, dispformula= ~0)
+#summary(mtime)
+```
+
+### Edu only
+
+
+Adding edu
+```{r}
+medu = glmmTMB(imrecall ~ edu*year + (year| personid) , data = imdata, dispformula= ~0)
+#summary(medu)
+```
+
+
+add gender
+```{r}
+medusex = glmmTMB(imrecall ~ sex*edu *year + (year| personid) , data = imdata, dispformula= ~0)
+#summary(medusex)
+```
+
+Break down the 3 way interaction
+
+```{r}
+imF = imdata[which(imdata$sex == "Female"),]
+imM = imdata[which(imdata$sex == "Male"),]
+```
+
+edu*year in just females
+```{r}
+fModel = glmmTMB(imrecall ~ edu *year + (year| personid) , data = imF, dispformula= ~0)
+#summary(fModel)
+```
+
+
+edu*year in just males
+```{r}
+mModel = glmmTMB(imrecall ~ edu *year + (year| personid) , data = imM, dispformula= ~0)
+#summary(mModel)
+```
+
+
+###  SES only
+
+```{r}
+min = glmmTMB(imrecall ~ adultincome *year + (year| personid) , data = imdata, dispformula= ~0)
+#summary(min)
+```
+
+
+```{r}
+minsex = glmmTMB(imrecall ~ sex*adultincome *year + (year| personid) , data = imdata, dispformula= ~0)
+#summary(minsex)
+```
+
+
+```{r}
+mchin = glmmTMB(imrecall ~ childincomecompare *year + (year| personid) , data = imdata, dispformula= ~0)
+#summary(mchin)
+```
+
+
+```{r}
+mchinsex = glmmTMB(imrecall ~ sex*childincomecompare *year + (year| personid) , data = imdata, dispformula= ~0)
+#summary(mchinsex)
+```
+
+
+### Edu and Income
+
+```{r}
+minsexedu = glmmTMB(imrecall ~ sex*adultincome*edu *year + (year| personid) , data = imdata, dispformula= ~0)
+#summary(minsexedu)
+```
+
+
+```{r}
+mchinsexedu = glmmTMB(imrecall ~ sex*childincomecompare*edu *year + (year| personid) , data = imdata, dispformula= ~0)
+#summary(mchinsexedu)
+```
+
+
+### Final table
+```{r,results='asis'}
+texreg::htmlreg(list(mtime, medu, medusex, min,minsex, minsexedu,mchin, mchinsex, mchinsexedu), 
+                custom.model.names = c("by Time", "Edu * Year","Edu * Sex * Year", "Income * Year", "Income * Sex * Year",  "Income * Sex * Edu * Year", "Child Income * Year", "Child Income * Sex * Year", "Child Income * Sex * Edu * Year"), 
+                caption = "Results of Immediate Recall Modeling", bold = TRUE)
+
+
+```
+
+*printed table to doc*
+
+```{r}
+# a = texreg::wordreg(list(mtime, medusex, minsex, minsexedu, mchinsex, mchinsexedu), 
+#                 custom.model.names = c("by Time" ,"Edu * Sex * Year",  "Income * Sex * Year",  "Income * Sex * Edu * Year" , "Child Income * Sex * Year", "Child Income * Sex * Edu * Year"), 
+#                 caption = "Results of Immediate Modeling", bold = TRUE, file = "imtable.doc")
+```
+
+## Plots
+
+```{r}
+sum = ddply(imdata, c("year","sex"), summarise,
+                     N = length(imrecall), 
+                     mean = mean(imrecall), 
+                     sd = sd(imrecall),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, group = sex, colour = sex)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Immediate Recall Score") +
+  theme_bw(base_size = 22, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+
+
+#ggsave("im_year.jpeg")  
+  
+```
+#### Adult variables
+
+```{r}
+sum = ddply(imdata, c("income01", "year"), summarise,
+                     N = length(imrecall), 
+                     mean = mean(imrecall), 
+                     sd = sd(imrecall),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Immediate Recall Score") +
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title = element_blank(),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+```
+
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+
+sum = ddply(imdata, c("sex", "edu1", "year"), summarise,
+                     N = length(imrecall), 
+                     mean = mean(imrecall), 
+                     sd = sd(imrecall),  
+                     se = sd / sqrt(N))
+
+colnames(sum) = c("sex","Education", "year", "N"   ,"mean" ,"sd" ,  "se" )
+
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=Education, group = Education)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Immediate Recall Score") +
+  theme_bw(base_size = 30, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10}
+sum = ddply(imdata, c("sex", "income01", "year"), summarise,
+                     N = length(imrecall), 
+                     mean = mean(imrecall), 
+                     sd = sd(imrecall),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Immediate Recall") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+```{r echo = FALSE, fig.height = 12, fig.width = 12, fig.align = "center"}
+sum = ddply(imdata, c("edu2", "income01", "year", "sex"), summarise,
+                     N = length(imrecall), 
+                     mean = mean(imrecall), 
+                     sd = sd(imrecall),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Immediate Recall Score") +
+  expand_limits(y = c(4.5,7.2))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 30, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.title  = element_blank(),
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(sex ~edu2, scales = "free") 
+```
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = interaction(sex, income01), linetype = sex)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Immediate Recalll") +
+  expand_limits(y = c(5,7.5))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75)) +
+     facet_grid(. ~edu2, scales = "free") 
+```
+
+#### Child Variables
+
+
+```{r}
+sum = ddply(imdata, c( "childincomecompare1", "year"), summarise,
+                     N = length(imrecall), 
+                     mean = mean(imrecall), 
+                     sd = sd(imrecall),  
+                     se = sd / sqrt(N))
+
+colnames(sum) = c("Childhood_Income_Comparison" ,"year", "N","mean", "sd", "se")
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=Childhood_Income_Comparison, group = Childhood_Income_Comparison)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Immediate Recall Score") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+```
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+sum = ddply(imdata, c("sex", "childincomecompare1", "year"), summarise,
+                     N = length(imrecall), 
+                     mean = mean(imrecall), 
+                     sd = sd(imrecall),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = childincomecompare1)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Immediate Recall") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+
+```{r echo = FALSE, fig.height = 12, fig.width = 12, fig.align = "center"}
+sum = ddply(imdata, c("edu2", "childincomecompare1", "year", "sex"), summarise,
+                     N = length(imrecall), 
+                     mean = mean(imrecall), 
+                     sd = sd(imrecall),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = childincomecompare1)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Immediate Recall Score") +
+  expand_limits(y = c(5,10))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(sex ~edu2, scales = "free") 
+```
+
+# Digit Ordering
+
+## Models
+
+```{r}
+mtime = glmmTMB(digit ~ year + (year| personid) , data = digitdata, dispformula= ~0)
+#summary(mtime)
+```
+
+### Edu only
+
+```{r}
+medu = glmmTMB(digit ~ edu*year + (year| personid) , data = digitdata, dispformula= ~0)
+#summary(medu)
+```
+
+
+```{r}
+medusex = glmmTMB(digit ~ sex*edu *year + (year| personid) , data = digitdata, dispformula= ~0)
+#summary(medusex)
+```
+
+
+
+###  SES only
+
+```{r}
+min = glmmTMB(digit ~ adultincome *year + (year| personid) , data = digitdata, dispformula= ~0)
+#summary(min)
+```
+
+
+```{r}
+minsex = glmmTMB(digit ~ sex*adultincome *year + (year| personid) , data = digitdata, dispformula= ~0)
+#summary(minsex)
+```
+
+
+```{r}
+mchin = glmmTMB(digit ~ childincomecompare *year + (year| personid) , data = digitdata, dispformula= ~0)
+#summary(mchin)
+```
+
+
+```{r}
+mchinsex = glmmTMB(digit ~ sex*childincomecompare *year + (year| personid) , data = digitdata, dispformula= ~0)
+#summary(mchinsex)
+```
+
+
+### Edu and Income
+
+
+```{r}
+minsexedu = glmmTMB(digit ~ sex*adultincome*edu *year + (year| personid) , data = digitdata, dispformula= ~0)
+#summary(minsexedu)
+```
+
+```{r}
+mchinsexedu = glmmTMB(digit ~ sex*childincomecompare*edu *year + (year| personid) , data = digitdata, dispformula= ~0)
+#summary(mchinsexedu)
+```
+
+
+### Final table
+```{r,results='asis'}
+texreg::htmlreg(list(mtime, medu, medusex, min,minsex, minsexedu,mchin, mchinsex, mchinsexedu), 
+                custom.model.names = c("by Time", "Edu * Year","Edu * Sex * Year", "Income * Year", "Income * Sex * Year",  "Income * Sex * Edu * Year", "Child Income * Year", "Child Income * Sex * Year", "Child Income * Sex * Edu * Year"), 
+                caption = "Results of Digit Ordering Modeling", bold = TRUE)
+
+
+```
+
+*Printed table*
+```{r}
+# a = texreg::wordreg(list(mtime, medusex, minsex, minsexedu, mchinsex, mchinsexedu), 
+#                 custom.model.names = c("by Time" ,"Edu * Sex * Year",  "Income * Sex * Year",  "Income * Sex * Edu * Year" , "Child Income * Sex * Year", "Child Income * Sex * Edu * Year"), 
+#                 caption = "Results of Digit Ordering Modeling", bold = TRUE, file = "digittable.doc")
+```
+
+## Plots
+
+```{r}
+sum = ddply(digitdata, c("year","sex"), summarise,
+                     N = length(digit), 
+                     mean = mean(digit), 
+                     sd = sd(digit),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, group = sex, colour = sex)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Digit Ordering Score") +
+  theme_bw(base_size = 22, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+
+#ggsave("digit_year.jpeg") 
+  
+```
+
+#### Adult variables
+
+
+
+```{r}
+sum = ddply(digitdata, c("edu1", "year"), summarise,
+                     N = length(digit), 
+                     mean = mean(digit), 
+                     sd = sd(digit),  
+                     se = sd / sqrt(N))
+colnames(sum) = c("Education", "year", "N"   ,"mean" ,"sd" ,  "se" )
+
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=Education, group = Education)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Digit Ordering") +
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+```
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+
+sum = ddply(digitdata, c("sex", "edu1", "year"), summarise,
+                     N = length(digit), 
+                     mean = mean(digit), 
+                     sd = sd(digit),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=edu1, group = edu1)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Digit Ordering") +
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+```{r}
+sum = ddply(digitdata, c("income01", "year"), summarise,
+                     N = length(digit), 
+                     mean = mean(digit), 
+                     sd = sd(digit),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Digit Ordering Score") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title = element_blank(),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))
+```
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10}
+sum = ddply(digitdata, c("sex", "income01", "year"), summarise,
+                     N = length(digit), 
+                     mean = mean(digit), 
+                     sd = sd(digit),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Digit Ordering") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+```{r echo = FALSE, fig.height = 12, fig.width = 12, fig.align = "center"}
+sum = ddply(digitdata, c("edu2", "income01", "year", "sex"), summarise,
+                     N = length(digit), 
+                     mean = mean(digit), 
+                     sd = sd(digit),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = income01)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Digit Ordering Score") +
+  expand_limits(y = c(6.5,8))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 30, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.title = element_blank(),
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(sex ~edu2, scales = "free") 
+```
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+ggplot(sum, aes(x=year, y=mean, colour=income01, group = interaction(sex, income01), linetype = sex)) + 
+  geom_line(position=pd, size = 2) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Digit Ordering") +
+  expand_limits(y = c(3.5,8))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75)) +
+     facet_grid(. ~edu2, scales = "free") 
+```
+
+#### Child Variables
+
+
+```{r echo = FALSE, fig.height = 6, fig.width = 10, fig.align = "center"}
+sum = ddply(digitdata, c("sex", "childincomecompare1", "year"), summarise,
+                     N = length(digit), 
+                     mean = mean(digit), 
+                     sd = sd(digit),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = childincomecompare1)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Digit Ordering") +
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 20, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(. ~sex, scales = "free") 
+```
+
+
+```{r echo = FALSE, fig.height = 12, fig.width = 12, fig.align = "center"}
+sum = ddply(digitdata, c("edu2", "childincomecompare1", "year", "sex"), summarise,
+                     N = length(digit), 
+                     mean = mean(digit), 
+                     sd = sd(digit),  
+                     se = sd / sqrt(N))
+pd = position_dodge(0.3)
+ggplot(sum, aes(x=year, y=mean, colour=childincomecompare1, group = childincomecompare1)) + 
+  geom_line(position=pd, size = 3) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="gray43", width=.1, position=pd) +
+  geom_point(position=pd, size=2, shape=21, fill="white") + 
+  xlab("Year") +   
+  ylab("Digit Ordering Score") +
+  expand_limits(y = c(5,10))+
+  scale_color_manual(values = c("#F5AECC", "#F9B720", "#73B751","#4791F1", "#9950F5"))+
+  theme_bw(base_size = 12, base_family = "Times") +
+  theme(legend.position= "right",
+        text = element_text(),
+        axis.text.x = element_text(colour = "black"),
+        axis.text.y = element_text(colour = "black"),
+        plot.title = element_text(colour = "black",  hjust = 0.5),
+        legend.title.align = 0.5,
+        legend.box.background = element_rect(colour = "gray43", size = .75))+
+   facet_grid(sex ~edu2, scales = "free") 
+```
