@@ -5,7 +5,4 @@ Data was retrieved with permission from the Wisconson Longitudinal Study (), in 
 
 This repository was created for PSYCH575, Fall 2020. 
 
-Our research questions include: 
-
-
-Please see included output for detailed results.
+Detailed analysis of full report is in "Wisconson_FullAnalysis.Rmd", with output "Wisconson_FullAnalysis.html"
